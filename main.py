@@ -1,11 +1,15 @@
 import os
 import asyncio
+import logging
 import xmlrpc.client
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import asyncpg
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -153,6 +157,7 @@ async def webhook_odoo(
     Payload JSON: { "id": int, "name": str, "list_price": float, "default_code": str|null }
     """
     if WEBHOOK_SECRET and x_odoo_secret != WEBHOOK_SECRET:
+        logger.warning("Webhook rechazado: token inválido (recibido='%s')", x_odoo_secret)
         raise HTTPException(status_code=403, detail="Token de webhook inválido")
 
     try:
@@ -160,32 +165,43 @@ async def webhook_odoo(
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON inválido")
 
+    logger.info("Webhook recibido. Payload: %s", data)
+
     odoo_id = data.get("id")
     nombre = data.get("name")
     precio = data.get("list_price")
 
     if odoo_id is None or nombre is None or precio is None:
+        logger.error(
+            "Payload incompleto. Campos faltantes — id=%s, name=%s, list_price=%s",
+            odoo_id, nombre, precio,
+        )
         raise HTTPException(
             status_code=422,
             detail="Campos requeridos en el payload: id, name, list_price",
         )
 
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO productos (odoo_id, nombre, codigo, precio_lista, actualizado_en)
-            VALUES ($1, $2, $3, $4, NOW())
-            ON CONFLICT (odoo_id) DO UPDATE
-                SET nombre        = EXCLUDED.nombre,
-                    codigo        = EXCLUDED.codigo,
-                    precio_lista  = EXCLUDED.precio_lista,
-                    actualizado_en = NOW()
-            """,
-            int(odoo_id),
-            str(nombre),
-            data.get("default_code") or None,
-            float(precio),
-        )
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO productos (odoo_id, nombre, codigo, precio_lista, actualizado_en)
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (odoo_id) DO UPDATE
+                    SET nombre        = EXCLUDED.nombre,
+                        codigo        = EXCLUDED.codigo,
+                        precio_lista  = EXCLUDED.precio_lista,
+                        actualizado_en = NOW()
+                """,
+                int(odoo_id),
+                str(nombre),
+                data.get("default_code") or None,
+                float(precio),
+            )
+        logger.info("DB actualizada — odoo_id=%s, precio=%s", odoo_id, precio)
+    except Exception as e:
+        logger.exception("Error al escribir en DB: %s", e)
+        raise HTTPException(status_code=500, detail=f"Error al actualizar la base de datos: {e}")
 
     return {"actualizado": odoo_id, "nuevo_precio": precio}
 
