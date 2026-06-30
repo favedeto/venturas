@@ -118,6 +118,12 @@ async def sync_productos():
     return {"sincronizados": len(productos)}
 
 
+@app.get("/webhook/odoo")
+async def webhook_odoo_verify():
+    """Endpoint de verificación / health-check para el webhook."""
+    return {"status": "ok"}
+
+
 @app.post("/webhook/odoo")
 async def webhook_odoo(
     request: Request,
