@@ -3,7 +3,7 @@ import asyncio
 import logging
 import xmlrpc.client
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, Query
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import asyncpg
@@ -191,32 +191,16 @@ async def webhook_odoo_verify():
 async def webhook_odoo(
     request: Request,
     x_odoo_secret: str = Header(default=""),
+    token: str = Query(default=""),
 ):
     """
     Webhook para actualizaciones en tiempo real desde Odoo.
-
-    Configuración en Odoo:
-      Ajustes > Técnico > Automatización > Acciones Automáticas
-      Modelo: product.template | Disparador: Al guardar (precio cambia)
-      Acción: Ejecutar código Python →
-        import requests
-        requests.post(
-            'https://<tu-servidor>/webhook/odoo',
-            json={
-                'id': record.id,
-                'name': record.name,
-                'list_price': record.list_price,
-                'default_code': record.default_code,
-            },
-            headers={'X-Odoo-Secret': '<WEBHOOK_SECRET>'},
-            timeout=5,
-        )
-
-    Encabezado requerido: X-Odoo-Secret: <valor de WEBHOOK_SECRET en .env>
+    Acepta el secreto via header X-Odoo-Secret o query param ?token=...
     Payload JSON: { "id": int, "name": str, "list_price": float, "default_code": str|null }
     """
-    if WEBHOOK_SECRET and x_odoo_secret != WEBHOOK_SECRET:
-        logger.warning("Webhook rechazado: token inválido (recibido='%s')", x_odoo_secret)
+    received_secret = x_odoo_secret or token
+    if WEBHOOK_SECRET and received_secret != WEBHOOK_SECRET:
+        logger.warning("Webhook rechazado: token inválido (recibido='%s')", received_secret)
         raise HTTPException(status_code=403, detail="Token de webhook inválido")
 
     try:
