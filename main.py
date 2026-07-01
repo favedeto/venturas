@@ -38,6 +38,33 @@ async def lifespan(app: FastAPI):
                 actualizado_en TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+
+    # Sincronización automática al iniciar
+    logger.info("Startup: iniciando sincronización con Odoo...")
+    try:
+        productos = await asyncio.to_thread(_odoo_fetch_all)
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                for p in productos:
+                    await conn.execute(
+                        """
+                        INSERT INTO productos (odoo_id, nombre, codigo, precio_lista, actualizado_en)
+                        VALUES ($1, $2, $3, $4, NOW())
+                        ON CONFLICT (odoo_id) DO UPDATE
+                            SET nombre        = EXCLUDED.nombre,
+                                codigo        = EXCLUDED.codigo,
+                                precio_lista  = EXCLUDED.precio_lista,
+                                actualizado_en = NOW()
+                        """,
+                        int(p["id"]),
+                        str(p.get("name", "")),
+                        p.get("default_code") or None,
+                        float(p.get("list_price", 0)),
+                    )
+        logger.info("Startup: sincronizados %d productos.", len(productos))
+    except Exception as e:
+        logger.error("Startup: error al sincronizar con Odoo: %s", e)
+
     yield
     await db_pool.close()
 
