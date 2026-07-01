@@ -19,6 +19,7 @@ ODOO_USER = os.environ["ODOO_USER"]
 ODOO_PASSWORD = os.environ["ODOO_PASSWORD"]
 DATABASE_URL = os.environ["DATABASE_URL"]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+SYNC_INTERVAL_MINUTES = int(os.environ.get("SYNC_INTERVAL_MINUTES", "10"))
 
 db_pool: asyncpg.Pool = None
 
@@ -65,7 +66,38 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Startup: error al sincronizar con Odoo: %s", e)
 
+    # Sincronización periódica en background
+    async def _periodic_sync():
+        while True:
+            await asyncio.sleep(SYNC_INTERVAL_MINUTES * 60)
+            logger.info("Sync periódico: iniciando...")
+            try:
+                productos = await asyncio.to_thread(_odoo_fetch_all)
+                async with db_pool.acquire() as conn:
+                    async with conn.transaction():
+                        for p in productos:
+                            await conn.execute(
+                                """
+                                INSERT INTO productos (odoo_id, nombre, codigo, precio_lista, actualizado_en)
+                                VALUES ($1, $2, $3, $4, NOW())
+                                ON CONFLICT (odoo_id) DO UPDATE
+                                    SET nombre        = EXCLUDED.nombre,
+                                        codigo        = EXCLUDED.codigo,
+                                        precio_lista  = EXCLUDED.precio_lista,
+                                        actualizado_en = NOW()
+                                """,
+                                int(p["id"]),
+                                str(p.get("name", "")),
+                                p.get("default_code") or None,
+                                float(p.get("list_price", 0)),
+                            )
+                logger.info("Sync periódico: %d productos actualizados.", len(productos))
+            except Exception as e:
+                logger.error("Sync periódico: error: %s", e)
+
+    task = asyncio.create_task(_periodic_sync())
     yield
+    task.cancel()
     await db_pool.close()
 
 
